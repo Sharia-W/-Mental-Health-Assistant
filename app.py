@@ -2,17 +2,14 @@ import os
 
 # ✅ 智能判断：云端用官方源，本地用镜像
 if "STREAMLIT_CLOUD" in os.environ or "STREAMLIT_SHARING" in os.environ:
-    # Streamlit Cloud 服务器在国外，用官方源更快
     pass
 else:
-    # 本地开发，使用国内镜像
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 import streamlit as st
 from datetime import datetime
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -54,35 +51,26 @@ HELPLINE_NUMBERS = """
 
 # ==================== 工具函数 ====================
 def get_current_time():
-    """获取当前时间"""
     return datetime.now().strftime("%H:%M")
 
-
 def get_current_date():
-    """获取当前日期时间"""
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
-
 def get_first_user_message(messages):
-    """获取当前会话的第一条用户消息"""
     for msg in messages:
         if msg["role"] == "user":
             return msg["content"]
     return None
 
-
 def detect_sensitive_content(text):
-    """检测是否包含敏感内容"""
     text_lower = text.lower()
     for keyword in SENSITIVE_KEYWORDS_LOWER:
         if keyword in text_lower:
             return True
     return False
 
-
 # ==================== CSV 导出工具 ====================
 def export_current_session_to_csv():
-    """导出当前会话为 CSV"""
     if "current_messages" not in st.session_state or not st.session_state.current_messages:
         return None, None
 
@@ -96,9 +84,7 @@ def export_current_session_to_csv():
         })
     return _export_to_csv(data, f"会话_{st.session_state.current_session_id}")
 
-
 def export_all_sessions_to_csv():
-    """导出所有会话为 CSV"""
     if "chat_sessions" not in st.session_state or not st.session_state.chat_sessions:
         return None, None
 
@@ -115,9 +101,7 @@ def export_all_sessions_to_csv():
             })
     return _export_to_csv(data, "全部聊天记录")
 
-
 def _export_to_csv(data, filename_prefix):
-    """通用 CSV 导出函数"""
     if not data:
         return None, None
     df = pd.DataFrame(data)
@@ -126,11 +110,9 @@ def _export_to_csv(data, filename_prefix):
     csv_data = df.to_csv(index=False, encoding="utf-8-sig")
     return csv_data, full_filename
 
-
 # ==================== RAG 核心功能 ====================
 @st.cache_resource
 def load_and_process_documents():
-    """加载并分割文档"""
     documents = []
 
     if not os.path.exists(DATA_PATH):
@@ -163,18 +145,16 @@ def load_and_process_documents():
     chunks = text_splitter.split_documents(documents)
     return chunks
 
-
 @st.cache_resource
 def create_vector_store(chunks):
-    """创建向量数据库"""
     if not chunks:
         return None
 
-    # ✅ 使用 HuggingFaceEmbeddings + 小模型
-    embeddings = HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True}
+    # ✅ 方案：使用 OpenAIEmbeddings（兼容 DeepSeek API）
+    embeddings = OpenAIEmbeddings(
+        model="text-embedding-ada-002",
+        openai_api_key=DEEPSEEK_API_KEY,
+        openai_api_base=DEEPSEEK_BASE_URL,
     )
 
     if os.path.exists(PERSIST_DIRECTORY):
@@ -192,9 +172,7 @@ def create_vector_store(chunks):
     )
     return vector_store
 
-
 def create_rag_chain(vector_store):
-    """创建 RAG 问答链"""
     if not vector_store:
         return None
 
@@ -234,7 +212,6 @@ def create_rag_chain(vector_store):
     )
 
     return qa_chain
-
 
 # ==================== Streamlit 界面 ====================
 st.set_page_config(
@@ -288,12 +265,10 @@ col_left, col_right = st.columns([1, 3])
 
 # ==================== 左侧边栏 ====================
 with col_left:
-    # 顶部团队名称
     st.markdown("## 🧠 团队名称")
     st.caption("Mental Health Chatbot")
     st.divider()
 
-    # 关于部分
     st.markdown("## 🧠 关于")
     with st.expander("📖 描述", expanded=True):
         st.markdown("""
@@ -315,7 +290,6 @@ with col_left:
 
     st.divider()
 
-    # 历史对话
     st.markdown("## 📋 历史对话")
     for session_id, session in sorted(st.session_state.chat_sessions.items(), key=lambda x: x[1]["id"]):
         if session_id == st.session_state.current_session_id:
@@ -331,7 +305,6 @@ with col_left:
                 st.session_state.current_messages = st.session_state.chat_sessions[session_id]["messages"].copy()
                 st.rerun()
 
-    # 新建对话
     if st.button("➕ 新建对话", use_container_width=True):
         new_id = max(st.session_state.chat_sessions.keys()) + 1 if st.session_state.chat_sessions else 1
         new_messages = [
@@ -354,7 +327,6 @@ with col_left:
 
     st.divider()
 
-    # 紧急求助、重置、导出
     with st.expander("🆘 紧急求助", expanded=False):
         st.markdown(HELPLINE_NUMBERS)
 
@@ -402,7 +374,6 @@ with col_left:
             else:
                 st.warning("没有聊天记录可导出。")
 
-    # 底部页脚
     st.caption("© 2026 心灵通科技")
     st.caption("All Rights Reserved")
 
@@ -412,7 +383,6 @@ with col_right:
     st.title(f"🧠 {current_title}")
     st.caption("基于 RAG 技术，为您提供可靠的心理健康信息")
 
-    # 聊天界面
     chat_container = st.container()
 
     for message in st.session_state.current_messages:
@@ -422,19 +392,16 @@ with col_right:
                 if "time" in message:
                     st.caption(f"🕐 {message['time']}")
 
-    # 用户输入
     user_input = st.chat_input("请输入您的问题...")
 
     if user_input:
         current_time = get_current_time()
 
         with chat_container:
-            # 用户消息
             with st.chat_message("user"):
                 st.write(user_input)
                 st.caption(f"🕐 {current_time}")
 
-            # 助手消息
             with st.chat_message("assistant"):
                 if detect_sensitive_content(user_input):
                     st.warning("⚠️ 我注意到您可能正在经历困难。请记住，您并不孤单。")
@@ -456,7 +423,6 @@ with col_right:
                 st.write(response)
                 st.caption(f"🕐 {current_time}")
 
-        # 保存消息
         st.session_state.current_messages.append({
             "role": "user",
             "content": user_input,
@@ -468,15 +434,12 @@ with col_right:
             "time": current_time
         })
 
-        # 同步到会话存储
         session_id = st.session_state.current_session_id
         st.session_state.chat_sessions[session_id]["messages"] = st.session_state.current_messages.copy()
         st.session_state.chat_sessions[session_id]["message_count"] = len(st.session_state.current_messages) // 2
 
-        # 更新标题
         first_user_msg = get_first_user_message(st.session_state.current_messages)
         if first_user_msg:
-            st.session_state.chat_sessions[session_id][
-                "title"] = f"Chat {session_id}: {first_user_msg[:20]}{'...' if len(first_user_msg) > 20 else ''}"
+            st.session_state.chat_sessions[session_id]["title"] = f"Chat {session_id}: {first_user_msg[:20]}{'...' if len(first_user_msg) > 20 else ''}"
 
         st.rerun()
