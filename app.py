@@ -16,6 +16,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.embeddings.fastembed import FastEmbedEmbeddings  # ✅ 移到顶部
 from langchain_classic.chains import RetrievalQA
 from langchain_classic.prompts import PromptTemplate
 import pandas as pd
@@ -166,19 +167,13 @@ def load_and_process_documents():
 
 @st.cache_resource
 def create_vector_store(chunks):
+    """创建向量数据库"""
     if not chunks:
         return None
 
-    # ✅ 根据环境选择模型
-    if "STREAMLIT_CLOUD" in os.environ or "STREAMLIT_SHARING" in os.environ:
-        model_name = "all-MiniLM-L6-v2"  # 云端用小模型
-    else:
-        model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 本地用大模型
-
-    embeddings = HuggingFaceEmbeddings(
-        model_name=model_name,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True}
+    # ✅ 使用 FastEmbed（轻量级，无下载依赖）
+    embeddings = FastEmbedEmbeddings(
+        model_name="BAAI/bge-small-en-v1.5"
     )
 
     if os.path.exists(PERSIST_DIRECTORY):
