@@ -9,3 +9,4 @@ pandas
 python-dotenv
 PyPDF2
 sentence-transformers
+fastembed
