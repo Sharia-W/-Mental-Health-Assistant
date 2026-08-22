@@ -1,6 +1,12 @@
 import os
 
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+# ✅ 智能判断：云端用官方源，本地用镜像
+if "STREAMLIT_CLOUD" in os.environ or "STREAMLIT_SHARING" in os.environ:
+    # Streamlit Cloud 服务器在国外，用官方源更快
+    pass
+else:
+    # 本地开发，使用国内镜像
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 import streamlit as st
 from datetime import datetime
@@ -160,12 +166,19 @@ def load_and_process_documents():
 
 @st.cache_resource
 def create_vector_store(chunks):
-    """创建向量数据库"""
     if not chunks:
         return None
 
+    # ✅ 根据环境选择模型
+    if "STREAMLIT_CLOUD" in os.environ or "STREAMLIT_SHARING" in os.environ:
+        model_name = "all-MiniLM-L6-v2"  # 云端用小模型
+    else:
+        model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # 本地用大模型
+
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        model_name=model_name,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True}
     )
 
     if os.path.exists(PERSIST_DIRECTORY):
