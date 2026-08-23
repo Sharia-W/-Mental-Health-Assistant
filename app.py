@@ -1,6 +1,6 @@
 import os
 
-# ✅ 判断环境：本地使用镜像，云端直接访问
+# ✅ 本地使用镜像
 if "STREAMLIT_CLOUD" in os.environ or "STREAMLIT_SHARING" in os.environ:
     pass
 else:
@@ -9,12 +9,9 @@ else:
 import streamlit as st
 from datetime import datetime
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_classic.chains import RetrievalQA
-from langchain_classic.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_classic.chains import ConversationChain
+from langchain_classic.memory import ConversationBufferMemory
 import pandas as pd
 
 # ==================== 加载环境变量 ====================
@@ -24,9 +21,6 @@ load_dotenv()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-
-PERSIST_DIRECTORY = "./vector_store"
-DATA_PATH = "./data"
 
 # ==================== 敏感词检测 ====================
 SENSITIVE_KEYWORDS = [
@@ -115,112 +109,60 @@ def _export_to_csv(data, filename_prefix):
     return csv_data, full_filename
 
 
-# ==================== RAG 核心功能 ====================
-@st.cache_resource
-def load_and_process_documents():
-    """加载并分割文档"""
-    documents = []
-    if not os.path.exists(DATA_PATH):
-        os.makedirs(DATA_PATH)
-        return []
-
-    for file in os.listdir(DATA_PATH):
-        file_path = os.path.join(DATA_PATH, file)
-        try:
-            if file.endswith(".pdf"):
-                loader = PyPDFLoader(file_path)
-                docs = loader.load()
-                documents.extend(docs)
-            elif file.endswith(".txt"):
-                loader = TextLoader(file_path, encoding="utf-8")
-                docs = loader.load()
-                documents.extend(docs)
-        except Exception as e:
-            st.error(f"❌ 加载 {file} 失败: {e}")
-
-    if not documents:
-        return []
-
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
-        separators=["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""]
-    )
-    chunks = text_splitter.split_documents(documents)
-    return chunks
-
-
-@st.cache_resource
-def create_vector_store(chunks):
-    """创建向量数据库 - 使用 DeepSeek 嵌入 API"""
-    if not chunks:
-        return None
-
-    # ✅ 使用 DeepSeek 嵌入 API（不需要下载任何模型）
-    embeddings = OpenAIEmbeddings(
-        model="deepseek-embedding",  # DeepSeek 嵌入模型
-        openai_api_key=DEEPSEEK_API_KEY,
-        openai_api_base=DEEPSEEK_BASE_URL,
-    )
-
-    if os.path.exists(PERSIST_DIRECTORY):
-        vector_store = Chroma(
-            persist_directory=PERSIST_DIRECTORY,
-            embedding_function=embeddings
-        )
-        if vector_store._collection.count() > 0:
-            return vector_store
-
-    vector_store = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory=PERSIST_DIRECTORY
-    )
-    return vector_store
-
-
-def create_rag_chain(vector_store):
-    """创建 RAG 问答链"""
-    if not vector_store:
-        return None
-
-    # DeepSeek 聊天模型
-    llm = ChatOpenAI(
+# ==================== 创建 LLM ====================
+def create_llm():
+    """创建 DeepSeek 聊天模型"""
+    return ChatOpenAI(
         model=DEEPSEEK_MODEL,
-        temperature=0.3,
+        temperature=0.7,
         openai_api_key=DEEPSEEK_API_KEY,
         openai_api_base=DEEPSEEK_BASE_URL,
     )
 
-    prompt_template = """
-    你是一个专业的心理健康助理。请基于以下上下文信息回答用户的问题。
 
-    如果上下文中包含求助热线信息，请务必提供给用户。
+def get_response(user_input):
+    """获取 DeepSeek 回复"""
+    llm = create_llm()
+    
+    # 系统提示词
+    system_prompt = """你是一名专业的心理咨询师，严格遵守中国心理咨询伦理规范。你的核心目标是建立信任关系，引导来访者探索自我、缓解困扰并促进心理成长。
 
-    上下文：
-    {context}
+# 咨询流程
+1. 建立信任关系
+2. 了解来访者问题
+3. 分析诊断
+4. 帮助指导
+5. 结束关系
 
-    用户问题：{question}
+# 规则
+- 每次对话内容长度不要超过100字，除非是进行心理问题总结或治疗方案生成
+- 不要有任何动作描述，现在的场景是面对面对话，只需要输出对话内容
+- 语气温和、共情、专业
 
-    回答：
-    """
+# 伦理边界
+- 当涉及自伤/伤人风险时，明确告知需要联系紧急联系人
+- 药物治疗需由精神科医生评估，不能替代"""
 
-    PROMPT = PromptTemplate(
-        template=prompt_template,
-        input_variables=["context", "question"]
-    )
-
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        chain_type_kwargs={"prompt": PROMPT},
-        return_source_documents=True
-    )
-
-    return qa_chain
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_input}
+    ]
+    
+    # 如果有历史消息，加入上下文
+    if "current_messages" in st.session_state and len(st.session_state.current_messages) > 1:
+        # 取最近6条历史消息作为上下文
+        history = st.session_state.current_messages[-6:]
+        context_messages = []
+        for msg in history:
+            if msg["role"] == "user":
+                context_messages.append({"role": "user", "content": msg["content"]})
+            elif msg["role"] == "assistant":
+                context_messages.append({"role": "assistant", "content": msg["content"]})
+        # 重新构建消息列表
+        messages = [{"role": "system", "content": system_prompt}] + context_messages + [{"role": "user", "content": user_input}]
+    
+    response = llm.invoke(messages)
+    return response.content
 
 
 # ==================== Streamlit 界面 ====================
@@ -251,31 +193,20 @@ if "current_messages" not in st.session_state:
     current_id = st.session_state.current_session_id
     st.session_state.current_messages = st.session_state.chat_sessions[current_id]["messages"].copy()
 
-if "qa_chain" not in st.session_state:
-    with st.spinner("正在加载心理健康数据..."):
-        chunks = load_and_process_documents()
-        if chunks:
-            vector_store = create_vector_store(chunks)
-            st.session_state.qa_chain = create_rag_chain(vector_store)
-        else:
-            st.session_state.qa_chain = None
-
 # ==================== 布局 ====================
 col_left, col_right = st.columns([1, 3])
 
 # ==================== 左侧边栏 ====================
 with col_left:
-    st.markdown("## 🧠 团队名称")
+    st.markdown("## 🧠 心灵通科技")
     st.caption("Mental Health Chatbot")
     st.divider()
 
     st.markdown("## 🧠 关于")
     with st.expander("📖 描述", expanded=True):
-        st.markdown("一个基于 RAG 技术的心理健康助手，为用户提供可靠的心理健康信息和支持。")
+        st.markdown("基于 DeepSeek 大模型的心理健康助手，提供 24/7 心理健康支持。")
     with st.expander("🎯 目标", expanded=True):
         st.markdown("- 提供 24/7 心理健康支持\n- 危机干预\n- 连接专业资源")
-    with st.expander("📚 数据来源", expanded=True):
-        st.markdown("- 世界卫生组织 (WHO)\n- 心理健康指南")
     with st.expander("⚠️ 重要提示", expanded=True):
         st.markdown("仅供参考，不能替代专业医疗建议")
     st.divider()
@@ -337,7 +268,7 @@ with col_left:
 with col_right:
     current_title = st.session_state.chat_sessions[st.session_state.current_session_id]["title"]
     st.title(f"🧠 {current_title}")
-    st.caption("基于 RAG 技术，为您提供可靠的心理健康信息")
+    st.caption("基于 DeepSeek 大模型，为您提供心理健康支持")
 
     chat_container = st.container()
     for message in st.session_state.current_messages:
@@ -361,16 +292,10 @@ with col_right:
                     response = "我注意到您可能正在经历困难。请记住，您并不孤单，求助是一种勇气。我已为您提供了紧急求助热线。"
                 else:
                     with st.spinner("思考中..."):
-                        if st.session_state.qa_chain:
-                            try:
-                                result = st.session_state.qa_chain.invoke({"query": user_input})
-                                response = result["result"]
-                                if "热线" in response or "求助" in response:
-                                    st.markdown(HELPLINE_NUMBERS)
-                            except Exception as e:
-                                response = f"抱歉，处理您的问题时出现了错误：{e}"
-                        else:
-                            response = "抱歉，我还没有加载心理健康数据。请确保 `data` 文件夹中有 PDF 或 TXT 文件。"
+                        try:
+                            response = get_response(user_input)
+                        except Exception as e:
+                            response = f"抱歉，处理您的问题时出现了错误：{e}"
                 st.write(response)
                 st.caption(f"🕐 {current_time}")
 
