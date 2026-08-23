@@ -1,18 +1,15 @@
 import os
 
-# ✅ 判断环境
+# ✅ 判断环境：本地使用镜像，云端直接访问
 if "STREAMLIT_CLOUD" in os.environ or "STREAMLIT_SHARING" in os.environ:
-    # 云端：不设置镜像（直接访问 huggingface.co）
     pass
 else:
-    # 本地：使用国内镜像
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 import streamlit as st
 from datetime import datetime
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
@@ -20,8 +17,10 @@ from langchain_classic.chains import RetrievalQA
 from langchain_classic.prompts import PromptTemplate
 import pandas as pd
 
+# ==================== 加载环境变量 ====================
 load_dotenv()
 
+# ==================== DeepSeek 配置 ====================
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
@@ -54,14 +53,17 @@ HELPLINE_NUMBERS = """
 def get_current_time():
     return datetime.now().strftime("%H:%M")
 
+
 def get_current_date():
     return datetime.now().strftime("%Y-%m-%d %H:%M")
+
 
 def get_first_user_message(messages):
     for msg in messages:
         if msg["role"] == "user":
             return msg["content"]
     return None
+
 
 def detect_sensitive_content(text):
     text_lower = text.lower()
@@ -85,6 +87,7 @@ def export_current_session_to_csv():
         })
     return _export_to_csv(data, f"会话_{st.session_state.current_session_id}")
 
+
 def export_all_sessions_to_csv():
     if "chat_sessions" not in st.session_state or not st.session_state.chat_sessions:
         return None, None
@@ -101,6 +104,7 @@ def export_all_sessions_to_csv():
             })
     return _export_to_csv(data, "全部聊天记录")
 
+
 def _export_to_csv(data, filename_prefix):
     if not data:
         return None, None
@@ -114,6 +118,7 @@ def _export_to_csv(data, filename_prefix):
 # ==================== RAG 核心功能 ====================
 @st.cache_resource
 def load_and_process_documents():
+    """加载并分割文档"""
     documents = []
     if not os.path.exists(DATA_PATH):
         os.makedirs(DATA_PATH)
@@ -147,14 +152,15 @@ def load_and_process_documents():
 
 @st.cache_resource
 def create_vector_store(chunks):
+    """创建向量数据库 - 使用 DeepSeek 嵌入 API"""
     if not chunks:
         return None
 
-    # ✅ 使用 HuggingFaceEmbeddings + 小模型
-    embeddings = HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True}
+    # ✅ 使用 DeepSeek 嵌入 API（不需要下载任何模型）
+    embeddings = OpenAIEmbeddings(
+        model="deepseek-embedding",  # DeepSeek 嵌入模型
+        openai_api_key=DEEPSEEK_API_KEY,
+        openai_api_base=DEEPSEEK_BASE_URL,
     )
 
     if os.path.exists(PERSIST_DIRECTORY):
@@ -174,9 +180,11 @@ def create_vector_store(chunks):
 
 
 def create_rag_chain(vector_store):
+    """创建 RAG 问答链"""
     if not vector_store:
         return None
 
+    # DeepSeek 聊天模型
     llm = ChatOpenAI(
         model=DEEPSEEK_MODEL,
         temperature=0.3,
@@ -186,6 +194,7 @@ def create_rag_chain(vector_store):
 
     prompt_template = """
     你是一个专业的心理健康助理。请基于以下上下文信息回答用户的问题。
+
     如果上下文中包含求助热线信息，请务必提供给用户。
 
     上下文：
@@ -254,6 +263,7 @@ if "qa_chain" not in st.session_state:
 # ==================== 布局 ====================
 col_left, col_right = st.columns([1, 3])
 
+# ==================== 左侧边栏 ====================
 with col_left:
     st.markdown("## 🧠 团队名称")
     st.caption("Mental Health Chatbot")
@@ -323,7 +333,7 @@ with col_left:
     st.caption("© 2026 心灵通科技")
     st.caption("All Rights Reserved")
 
-
+# ==================== 右侧主界面 ====================
 with col_right:
     current_title = st.session_state.chat_sessions[st.session_state.current_session_id]["title"]
     st.title(f"🧠 {current_title}")
